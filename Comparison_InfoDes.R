@@ -14,16 +14,20 @@ library(microbenchmark)
 library(profvis)
 library(Rcpp)
 library(RcppArmadillo)
+library(shiny)
 
 # Load functions
 source("seqDB.R")
 source("seqDB2.R")
+source("seqDB3.R")
 source("Derr.R")
 source("InfoDes.R")
 source("DBerrS.R")
 source("DerrS.R")
 sourceCpp("InfoDes_cpp.cpp")
+sourceCpp("DerrS_cpp.cpp")
 
+#----
 set.seed(123)
 cs <- idefix::Profiles(lvls = c(4, 3, 2), coding = c("E", "E", "E"))
 # Sepcify prior for each respondent
@@ -61,9 +65,72 @@ set <- SeqDB(des = init.des, cand.set = cs, n.alts = 2,
              par.draws = dr, prior.covar = v, weights = w)
 set2 <- SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
                par.draws = dr, prior.covar = v, weights = w)
-set;set2
+set3 <- SeqDB3(des = init.des, cand.set = cs, n.alts = 2,
+               par.draws = dr, prior.covar = v, weights = w)
+set;set2;set3
 
-# profvis({SeqDB(des = init.des, cand.set = cs, n.alts = 2,
-#                par.draws = dr, prior.covar = v, weights = w)})
-# profvis({SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
-#                par.draws = dr, prior.covar = v, weights = w)})
+profvis({SeqDB(des = init.des, cand.set = cs, n.alts = 2,
+               par.draws = dr, prior.covar = v, weights = w)})
+profvis({SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
+               par.draws = dr, prior.covar = v, weights = w)})
+profvis({SeqDB3(des = init.des, cand.set = cs, n.alts = 2,
+                par.draws = dr, prior.covar = v, weights = w)})
+
+
+#----
+#   Example from paper
+#'   Discrete choice experiment without any adaptive sets.
+# data("example_design")
+# xdes <- example_design
+# xdes
+# getwd()
+n.sets <- 8
+alternatives <- c("Alternative A", "Alternative B")
+attributes <- c("Price", "Time", "Comfort")
+labels <- vector(mode = "list", length(attributes))
+labels[[1]] <- c("$10", "$5", "$1")
+labels[[2]] <- c("20 min", "12 min", "3 min")
+labels[[3]] <- c("bad", "average", "good")
+
+code <- c("D", "D", "D")
+
+b.text <- "Please choose the alternative you prefer"
+i.text <- "Welcome, here are some instructions ... good luck!"
+e.text <- "Thanks for taking the survey"
+
+# SurveyApp (des = xdes, n.total = n.sets, alts = alternatives,
+#            atts = attributes, lvl.names = labels, coding = code,
+#            buttons.text = b.text, intro.text = i.text, end.text = e.text,
+#            data.dir = NULL)
+
+
+#   Discrete choice experiment containing adaptive sets.
+n.sets <- 12
+p.mean <- c(0.3, 0.7, 0.3, 0.7, 0.3, 0.7)
+p.var <- diag(length(p.mean))
+
+levels <- c(3, 3, 3)
+code <- c("D", "D", "D")
+cand <- idefix::Profiles(lvls = levels, coding = code)
+
+dataDir = "C:/Users/danie/Documents/Daniel Gil/KULeuven/Stage 2/Thesis/Scripts/Output_test"
+
+SurveyApp (des = xdes, n.total = n.sets, alts = alternatives,
+           atts = attributes, lvl.names = labels, coding = code,
+           buttons.text = b.text, intro.text = i.text,
+           end.text = e.text, data.dir = dataDir, crit= "KL",
+           prior.mean = p.mean, prior.covar = p.var,
+           cand.set = cand, m = 6)
+
+#   Without initial design
+SurveyApp (des = NULL, n.total = n.sets, alts = alternatives,
+           atts = attributes, lvl.names = labels, coding = code,
+           buttons.text = b.text, intro.text = i.text,
+           end.text = e.text, data.dir = dataDir, crit = "KL",
+           prior.mean = p.mean, prior.covar = p.var,
+           cand.set = cand, m = 6)
+
+runApp(SurveyApp (des = xdes, n.total = n.sets,
+                  alts = alternatives, atts = attributes, lvl.names = labels,
+                  coding = code, buttons.text = b.text, intro.text = i.text,
+                  end.text = e.text, data.dir = tempdir()))

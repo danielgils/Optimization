@@ -23,3 +23,33 @@ DBerrS <- function(full.comb, cand.set, par.draws, des, n.alts, cte.des, i.cov, 
   db.error <- mean(w.d.errors, na.rm = TRUE)
   return(db.error)
 }
+
+DBerrS2 <- function(full.comb, cand.set, par.draws, des, n.alts, cte.des, i.cov, n.par, weights) {
+  # Take set.
+  set <- as.matrix(cand.set[as.numeric(full.comb), ])
+  # Add alternative specific constants if necessary
+  if (!is.null(cte.des)) {
+    set <- as.matrix(cbind(cte.des, set))
+  }
+  # For each draw calculate D-error.
+  d.errors <- apply(par.draws, 1, DerrS2, set, des, n.alts, i.cov, n.par)
+  w.d.errors <- d.errors * weights
+  # DB-error. 
+  db.error <- mean(w.d.errors, na.rm = TRUE)
+  return(db.error)
+}
+
+DBerrS3 <- function(full.comb, cand.set, par.draws, des, n.alts, cte.des, i.cov, n.par, weights) {
+  # Take set.
+  set <- as.matrix(cand.set[as.numeric(full.comb), ])
+  # Add alternative specific constants if necessary
+  if (!is.null(cte.des)) {
+    set <- as.matrix(cbind(cte.des, set))
+  }
+  # For each draw calculate D-error.
+  d.errors <- apply(par.draws, 1, DerrS_cpp, set, des, n.alts, i.cov, n.par)
+  w.d.errors <- d.errors * weights
+  # DB-error. 
+  db.error <- mean(w.d.errors, na.rm = TRUE)
+  return(db.error)
+}
