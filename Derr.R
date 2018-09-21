@@ -17,3 +17,10 @@ Derr2 <- function(par, des, n.alts) {
   detinfo <- det(info.des) # Calculates the determinant of the information matrix
   ifelse((detinfo <= 0), return(NA), return(detinfo^(-1 / length(par)))) # Return the d-error
 }
+
+# Function using Info_des_cpp and det_cpp
+Derr3 <- function(par, des, n.alts) {
+  info.des <- InfoDes_cpp(par, des, n.alts)  # Calculates Fisher-Information matrix
+  detinfo <- det_cpp(info.des) # Calculates the determinant of the information matrix
+  ifelse((detinfo <= 0), return(NA), return(detinfo^(-1 / length(par)))) # Return the d-error
+}
