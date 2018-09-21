@@ -81,9 +81,18 @@ profvis({SeqDB3(des = init.des, cand.set = cs, n.alts = 2,
 #   Example from paper
 #'   Discrete choice experiment without any adaptive sets.
 # data("example_design")
-# xdes <- example_design
-# xdes
+load("C:/Users/danie/Documents/Daniel Gil/KULeuven/Stage 2/Thesis/Scripts/idefix/data/example_design.RData")
+xdes <- example_design
+xdes
 # getwd()
+
+source("SurveyApp.R")
+source("Decode.R")
+source("Charbin.R")
+source("Profiles.R")
+source("ImpsampMNL.R")
+
+
 n.sets <- 8
 alternatives <- c("Alternative A", "Alternative B")
 attributes <- c("Price", "Time", "Comfort")
@@ -115,7 +124,7 @@ cand <- idefix::Profiles(lvls = levels, coding = code)
 
 dataDir = "C:/Users/danie/Documents/Daniel Gil/KULeuven/Stage 2/Thesis/Scripts/Output_test"
 
-SurveyApp (des = xdes, n.total = n.sets, alts = alternatives,
+SurveyApp(des = xdes, n.total = n.sets, alts = alternatives,
            atts = attributes, lvl.names = labels, coding = code,
            buttons.text = b.text, intro.text = i.text,
            end.text = e.text, data.dir = dataDir, crit= "KL",

@@ -13,9 +13,19 @@ DerrS <- function(par.draws, set, des, n.alts, i.cov, n.par) {
   return(d.error)
 }
 
+# Function using Info_des_cpp
 DerrS2 <- function(par.draws, set, des, n.alts, i.cov, n.par) {
   des.f <- rbind(des, set) 
   info.d <- InfoDes_cpp(par = par.draws, des = des.f, n_alts = n.alts) 
   d.error <- det(info.d + i.cov)^(-1 / n.par)
+  return(d.error)
+}
+
+# Function using Info_des_cpp and det_cpp
+DerrS3 <- function(par.draws, set, des, n.alts, i.cov, n.par) {
+  des.f <- rbind(des, set) 
+  info.d <- InfoDes_cpp(par = par.draws, des = des.f, n_alts = n.alts) 
+  #d.error <- det(info.d + i.cov)^(-1 / n.par)
+  d.error <- det_cpp(info.d + i.cov)^(-1 / n.par)
   return(d.error)
 }

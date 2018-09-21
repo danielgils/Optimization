@@ -1,7 +1,7 @@
 // [[Rcpp::depends(RcppArmadillo)]]
 
 # include <RcppArmadillo.h>
-//# include <.h>
+
 using namespace Rcpp;
 
 // [[Rcpp::export]]
@@ -13,6 +13,18 @@ double DerrS_cpp(NumericVector par, NumericMatrix set, NumericMatrix des,
   arma::mat set_arma(set.begin(), set.nrow(), set.ncol(), false);
   arma::mat des_f = join_cols(des_arma, set_arma);
   
+ // Another way to do the rbind: (It's slower)
+ /*NumericMatrix out = no_init_matrix(des.nrow()+set.nrow(), des.ncol());
+ for (int j = 0; j < des.nrow()+set.nrow(); j++) {
+   if (j < des.nrow()) {
+     out(j, _) = des(j, _);
+   } else {
+     out(j, _) = set(j - des.nrow(), _);
+   }
+ }*/
+ //Rcout << "arma:" << des_f << std::endl;
+ //Rcout << "std:" << out << std::endl;
+ 
   // Call function InfoDes_cpp
   //info.d <- InfoDes(par = par.draws, des = des.f, n.alts = n.alts) 
   //NumericMatrix info_d(des.ncol(),des.ncol());
@@ -33,5 +45,11 @@ double DerrS_cpp(NumericVector par, NumericMatrix set, NumericMatrix des,
   //return(wrap(sum_1));
   //return(info_d);
 }
+
  
  
+ // [[Rcpp::export]]
+ double det_cpp(NumericMatrix set) {
+   arma::mat set_arma(set.begin(), set.nrow(), set.ncol(), false);
+   return(arma::det(set_arma));
+ }

@@ -97,6 +97,13 @@
 #' **Modified**<br>
 #' *InfoDes_cpp:* Is the implementation of *InfoDes* in Rcpp<br> 
 #' *Derr2:* Is the same function as the original, the only difference is that call *InfoDes_cpp* instead of *InfoDes*<br>
+#' *Derr3:* Is the same function as the *Derr2*, but the determinant is computed with *det_cpp* <br>
 #' *DerrS2:*Is the same function as the original, the only difference is that call *InfoDes_cpp* instead of *InfoDes*<br>
+#' *DerrS3:* Is the same function as the *DerrS2*, but the determinant is computed with *det_cpp* <br>
 #' *DBerrS2:*Is the same function as the original, the only difference is that call *InfoDes_cpp* instead of *InfoDes*<br>
+#' *DBerrS3:*Is the same function as the *DBerrS3*, but the D-error is computed with *DerrS_cpp*<br>
+#' #' *DBerrS4:*Is the same function as the *DBerrS3*, but the D-error is computed with *DerrS3* (using base:rbind)<br>
 #' *SeqDB2:* Is the same function as the original, the only difference is that call *InfoDes_cpp* instead of *InfoDes*<br>
+#' *SeqDB3:* Is the same function as the original, calls *InfoDes_cpp* and *DBerrS3*, which implies *DerrS_cpp*<br>
+#' *SeqDB4:* Is the same function as the original, calls *InfoDes_cpp* and *DBerrS4*, which implies *DerrS3* (uses base:rbind and *det_cpp*)<br>
+#' *SeqDB4:* Is the same function as the original, calls *InfoDes_cpp* and *DBerrS4*, which implies *DerrS3* (uses base:rbind and *det_cpp*), and also calls *Derr3*, where it uses det_cpp<br>

@@ -307,10 +307,11 @@ set2 <- SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
              par.draws = dr, prior.covar = v, weights = w)
 set2
 
-microbenchmark(R=SeqDB(des = init.des, cand.set = cs, n.alts = 2,
+a <- microbenchmark(R=SeqDB(des = init.des, cand.set = cs, n.alts = 2,
                      par.draws = dr, prior.covar = v, weights = w),
                Cpp=SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
-                      par.draws = dr, prior.covar = v, weights = w))
+                      par.draws = dr, prior.covar = v, weights = w));a
+autoplot.microbenchmark(a)
 #----
 
 #----
@@ -411,25 +412,59 @@ d.error <- det(info.d + i.cov)^(-1 / n.par) # Calculate sequential d-error
 sourceCpp("DerrS_cpp.cpp")
 rbind(des, set) ==
 DerrS_cpp(par.draws[1,], set, des, n.alts, i.cov, n.par)
+# microbenchmark(R = rbind(des, set),
+#               cpp= DerrS_cpp(par.draws[1,], set, des, n.alts, i.cov, n.par))
 
 # Call function InfoDes
 sourceCpp("DerrS_cpp.cpp")
 InfoDes(par = par.draws[1,], des = des.f, n.alts = n.alts)  # Information 
 InfoDes_cpp(par = par.draws[1,], des = des.f, n_alts = n.alts)  # Information
 DerrS_cpp(par.draws[1,], set, des, n.alts, i.cov, n.par)
+# microbenchmark(R= InfoDes(par = par.draws[1,], des = des.f, n.alts = n.alts),
+#                Info_des_cpp = InfoDes_cpp(par = par.draws[1,], des = des.f, n_alts = n.alts),
+#                Derrs_cpp =DerrS_cpp(par.draws[1,], set, des, n.alts, i.cov, n.par))
 
 # Calculate determinant
 sourceCpp("DerrS_cpp.cpp")
 det(info.d + i.cov)^(-1 / n.par) # Calculate sequential d-error
-DerrS_cpp(par.draws[1,], set, des, n.alts, i.cov, n.par)
-info.d + i.cov
-det(info.d + i.cov)
 
+# The determinant in cpp is faster
+# det_cpp(info.d + i.cov)^(-1 / n.par) # Calculate sequential d-error
+# a = microbenchmark(R=det(info.d + i.cov)^(-1 / n.par),
+#                 cpp=det_cpp(info.d + i.cov)^(-1 / n.par));a
+# autoplot.microbenchmark(a)
+
+# comparison between functions
+DerrS(par.draws[1,], set, des, n.alts, i.cov, n.par)
+DerrS2(par.draws[1,], set, des, n.alts, i.cov, n.par)
+DerrS_cpp(par.draws[1,], set, des, n.alts, i.cov, n.par)
+
+a <- microbenchmark(r = DerrS(par.draws[1,], set, des, n.alts, i.cov, n.par),
+               Info_des = DerrS2(par.draws[1,], set, des, n.alts, i.cov, n.par),
+               cpp = DerrS_cpp(par.draws[1,], set, des, n.alts, i.cov, n.par));a
+autoplot.microbenchmark(a)
+boxplot(a)
+
+DBerrS(full.comb,cand.set, par.draws, des, n.alts, cte.des, i.cov, n.par, weights)
+DBerrS2(full.comb,cand.set, par.draws, des, n.alts, cte.des, i.cov, n.par, weights)
+DBerrS3(full.comb,cand.set, par.draws, des, n.alts, cte.des, i.cov, n.par, weights)
+b <- microbenchmark(r = DBerrS(full.comb,cand.set, par.draws, des, n.alts, cte.des,
+                          i.cov, n.par, weights),
+               Infodes = DBerrS2(full.comb,cand.set, par.draws, des, n.alts, 
+                                 cte.des, i.cov, n.par, weights),
+               cpp = DBerrS3(full.comb,cand.set, par.draws, des, n.alts, 
+                             cte.des, i.cov, n.par, weights));b
+autoplot.microbenchmark(b)
+boxplot(b)
 #----
+# Remove all elements
+rm(list = ls())
 # Changing functions and comparing again (microbenchmark)
 source("seqDB.R")
 source("seqDB2.R")
 source("seqDB3.R")
+source("seqDB4.R")
+source("seqDB5.R")
 source("Derr.R")
 source("InfoDes.R")
 source("DBerrS.R")
@@ -476,16 +511,28 @@ set2 <- SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
                par.draws = dr, prior.covar = v, weights = w)
 set3 <- SeqDB3(des = init.des, cand.set = cs, n.alts = 2,
                par.draws = dr, prior.covar = v, weights = w)
-set;set2;set3
+set4 <- SeqDB4(des = init.des, cand.set = cs, n.alts = 2,
+               par.draws = dr, prior.covar = v, weights = w)
+set5 <- SeqDB5(des = init.des, cand.set = cs, n.alts = 2,
+               par.draws = dr, prior.covar = v, weights = w)
+set;set2;set3;set4;set5
 
-microbenchmark(R = SeqDB(des = init.des, cand.set = cs, n.alts = 2,
+a = microbenchmark(R = SeqDB(des = init.des, cand.set = cs, n.alts = 2,
                        par.draws = dr, prior.covar = v, weights = w),
                Infodes_Cpp = SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
                           par.draws = dr, prior.covar = v, weights = w),
                DerrS_cpp = SeqDB3(des = init.des, cand.set = cs, n.alts = 2,
-                      par.draws = dr, prior.covar = v, weights = w))
+                      par.draws = dr, prior.covar = v, weights = w),
+               det_cpp = SeqDB4(des = init.des, cand.set = cs, n.alts = 2,
+                      par.draws = dr, prior.covar = v, weights = w),
+               det_cpp_2 = SeqDB5(des = init.des, cand.set = cs, n.alts = 2,
+                                par.draws = dr, prior.covar = v, weights = w));a
+autoplot.microbenchmark(a)
+# it's still better seqDB2: the rbind is faster in R that in cpp
+# using rbind and det_cpp is faster
+# To see source code of rbind: library(pryr);show_c_source(.Primitive(rbind(x)));
 
-profvis(SeqDB3(des = init.des, cand.set = cs, n.alts = 2,
+profvis(SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
                par.draws = dr, prior.covar = v, weights = w))
 # library(microbenchmark)
 # microbenchmark(apply(par.draws, 1, Derr, des = des,  n.alts = n.alts),
@@ -526,4 +573,5 @@ profvis(SeqDB3(des = init.des, cand.set = cs, n.alts = 2,
 #'                par.draws = dr, prior.covar = v, weights = w)
 #'   #set
 #'   })
+
 
