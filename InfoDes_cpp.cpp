@@ -24,7 +24,7 @@ NumericMatrix InfoDes_cpp(NumericVector par, NumericMatrix des,
       cont = 2;
     }
   }
-  
+  //comment
   // probability
   arma::vec par_arma(par.begin(),des.ncol(),false); //Initializing arma vector 
   arma::mat diagonal = arma::diagmat(par_arma);
