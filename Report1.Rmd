@@ -1,0 +1,567 @@
+---
+title: "Optimizing seqDB function"
+author: "Daniel Gil"
+date: "September 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+###**Summary**
+Multiple options were used to optimize *seqDB* function. In the end, the final function is almost (9x) times faster than the original (see last plot \@ref(fig:final)).
+
+###**Description process**
+According to Wickham in his book "Advanced R", optimizing code to make it faster is an iterative procedure: <br>
+1. Find the biggest bottleneck (the slowest part of your code).<br>
+2. Try to eliminate it (you may not succeed but that’s ok).<br>
+3. Repeat until your code is “fast enough.”<br>
+This report describes the process conducted to optimize the *seqDB* function. <br>
+<br>
+
+### Considerations
+- To be able to create multiple versions of a function without losing the location of each file, I re-organized the files that comes from the package. Now each function has its own file.
+- I choose the example used in Chapter 3 of the paper "Generating Optimal Designs for Discrete Choice Experiments in R: The idefix Package" to measure the improvements in the optimization process.
+- The following packages are used here: <br>
+  **profvis**: to find bottlenecks in *seqDB* function<br>
+  **microbenchmark**: to compare processing time of each implementation<br>
+  **Rcpp**: to implement code in C++.<br>
+  **RcppArmadillo**: to use built-in armadillo functions in C++.<br>
+
+## 1. Find the biggest bottleneck <br>
+The first step is to load all functions from the package that are used in *SeqDB* function. Because all functions were reorganized, each function need to be loaded:
+```{r source}
+source("seqDB.R")
+source("Derr.R")
+source("InfoDes.R")
+source("DBerrS.R")
+source("DerrS.R")
+```
+
+Then all packages are loaded and the example is pasted as in the paper:
+```{r packages}
+# Load packages
+library(microbenchmark)
+library(profvis)
+library(Rcpp)
+library(RcppArmadillo)
+
+# Run the code as in the paper.
+set.seed(123)
+cs <- idefix::Profiles(lvls = c(4, 3, 2), coding = c("E", "E", "E"))
+
+# Specify prior for each respondent
+m <- c(0.5, 0.5, 1, -0.3, -0.7, 0.7)
+v <- diag(length(m))
+ps <- MASS::mvrnorm(n = 10, mu = m, Sigma = v)
+
+# Generate DB optimal design: 8 choice sets with 2 alternatives each
+init.des <- idefix::Modfed(cand.set = cs, n.sets = 8, n.alts = 2,
+                           alt.cte = c(0, 0), par.draws = ps)$design
+#init.des
+
+#   Simulate choice data for the initial design
+#   True individual preference parameter
+truePREF <- c(0.8, 1, 1.2, -0.4, -0.8, 1.3)
+
+#   Simulate choices on the logit model
+#   In this case, for the first five choice sets the second alternative is 
+#   chosen, whereas for the last three the first alternative is chosen.
+set.seed(123)
+y.sim <- idefix::RespondMNL(par = truePREF, des = init.des, n.alts = 2)
+#y.sim 
+
+#   Updating prior distribution
+set.seed(123)
+draws <- idefix::ImpsampMNL(prior.mean = m, prior.covar = v,
+                            des = init.des, n.alts = 2, y = y.sim, m = 6)
+#draws
+
+#   Selecting optimal choice
+#   minimizing DB-error
+dr <- draws$sample
+w <- draws$weights
+set <- SeqDB(des = init.des, cand.set = cs, n.alts = 2,
+             par.draws = dr, prior.covar = v, weights = w)
+set
+
+# Profiling seqDB function to find bottlenecks
+profvis(SeqDB(des = init.des, cand.set = cs, n.alts = 2,
+               par.draws = dr, prior.covar = v, weights = w))
+```
+Multiple things can be noticed: <br>
+- The *profvis* result shows that in the *seqDB* function the bottleneck is located in an apply function. This apply calls the *DBerrS* function.<br>
+- In *DBerrS* function, the bottleneck is located in an apply function that calls the *DerrS* function. <br>
+- In *DerrS* function, the bottleneck is located in the line that calls the function *InfoDes*.<br>
+- In *InfoDes* function, there are multiple lines that takes time to process: a rep(seq()) line. The line where the probability is computed. And the line where the information matrix is computed.<br>
+<br>
+For these reasons, the biggest bottleneck is in the *InfoDes* function.
+
+## 2. Implementation of *InfoDes* in C++ with Rcpp package.
+Before implementing the code in C++, the parameters of the function *seqDB* as well as the variables created before the first apply within the function are created in the global enviroment (like an attach).
+
+```{r param}
+# Paramaters.
+des <- init.des;des # Optimal design (matrix)
+cand.set <- cs;cs # All possible treatments (matrix)
+n.alts <- 2 # Number of alternatives for each set (numeric)
+par.draws <- dr # Draws from the posterior (matrix)
+prior.covar <-  v;prior.covar # Prior covariance matrix (Multinormal) (matrix)
+weights <- w;weights # Weights from importance sampling algorithm (numeric)
+
+#----
+# Initialize.
+n.sets <- nrow(des) / n.alts # Number of sets
+cte.des <- NULL # 
+
+# If no weights, equal weights.
+if (is.null(weights)) {
+  weights <- rep(1, nrow(par.draws)) # Each draw has weight = 1
+}
+
+# Detect alternative specific constants
+des.f <- as.data.frame(des) # matrix to data.frame to use dplyr functions
+alt.cte <- dplyr::select(des.f, dplyr::contains(".cte")) #  select variables 
+#that have that string
+if (ncol(alt.cte) > 0) {
+  cte.des <- alt.cte[1:n.alts, ]  # Why until n.alts?? Ans: It seems that takes the constant defined in the Modfed function. All choice sets have the same constant
+}
+
+# Handling par.draws.
+if (!(is.matrix(par.draws))) {
+  par.draws <- matrix(par.draws, nrow = 1) #  Transform draws that are not matrices to vector. Why? Ans: It seems that is done to give the next error
+}
+
+# Error par.draws
+if (ncol(des) != ncol(par.draws)) {
+  stop("Numbers of parameters in par.draws does not match the number of parameters in the design.")
+}
+
+# Error identifying model.
+if (n.sets < ncol(par.draws)) { # Dont know why this error yet. Check
+  stop("Model is unidentified. Increase the number of choice sets or decrease parameters to estimate.")
+}
+
+#----
+# Starting and initializing values.
+i.cov <- solve(prior.covar) # Inverse of prior covariance matrix
+d.start <- apply(par.draws, 1, Derr, des = des,  n.alts = n.alts)
+
+#---- 
+# Infodes
+group <- rep(seq(1, nrow(des) / n.alts, 1), each = n.alts) #Vector to 
+
+# probability of each alternative in each set
+u <- des %*% diag(par.draws[1,])  # 
+u <- .rowSums(u, m = nrow(des), n = length(par.draws[1,]))  
+p <- exp(u) / rep(rowsum(exp(u), group), each = n.alts)
+# information matrix
+info.des <- crossprod(des * p, des) - crossprod(rowsum( des * p, group))
+```
+
+Then, the implementation is coded and sourced in R to make the comparison. To do this, each line of the *InfoDes* function was coded in C++ and tested. <br>
+Having done this, a copy of the *seqDB* function is done, called *seqDB2*, with the following changes: <br>
+- Calls the function *Derr2* instead of *Derr*, which calls the function *Infodes_cpp* instead of *InfoDes*. <br>
+- Calls the function *DBerrS2* instead of *DBerrS*, which calls the function *DerrS2* which calls *Infodes_cpp* instead of *InfoDes*. <br>
+<br>
+The comparison of the results and time to execute is presented:
+
+
+```{Rcpp echo=F, cache=T}
+// [[Rcpp::depends(RcppArmadillo)]]
+
+# include <RcppArmadillo.h>
+using namespace Rcpp;
+
+// [[Rcpp::export]]
+NumericMatrix InfoDes_cpp(NumericVector par, NumericMatrix des,
+                             double n_alts) {
+  int i = 0;
+  NumericVector group(des.nrow());
+  int ind = 0;
+  int cont = 1;
+  //group <- rep(seq(1, nrow(des) / n.alts, 1), each = n.alts) #Vector to 
+  //indicate the choice set
+  // ToDo: try to improve => rep function in cpp: 
+  //https://stackoverflow.com/questions/28442582/reproducing-r-rep-with-the-times-argument-in-c-and-rcpp
+  for (i = 0; i < des.nrow(); i++){
+    if (cont <= n_alts){
+      group[i] = ind;
+      cont++;
+    } else{
+      ind++;
+      group[i] = ind;
+      cont = 2;
+    }
+  }
+  
+  // probability
+  arma::vec par_arma(par.begin(),des.ncol(),false); //Initializing arma vector 
+  arma::mat diagonal = arma::diagmat(par_arma);
+  
+  // Multiplication
+  // Create arma objects;
+  arma::mat des_arma(des.begin(), des.nrow(), des.ncol(), false);
+  arma::mat u = des_arma * par_arma;
+  
+  // Exponential
+  arma::mat u_exp = exp(u);
+  
+  // Sum for each choice set
+  NumericMatrix uexp = wrap(u_exp);
+  NumericMatrix rowsum(des.nrow()/n_alts,1);
+  cont = 1;
+  int index = 0;
+  for( i = 0; i < des.nrow(); i++){
+    if( cont <= n_alts){
+      rowsum(index,0) += u_exp(i,0);
+      cont++;
+    }else{
+    index++;
+    rowsum(index,0) += u_exp(i,0);
+    cont = 2;
+    }
+  }
+  
+  // Repite each value n_alts times;
+  NumericMatrix rowsum_rep(des.nrow(),1);
+  cont = 1;
+  index = 0 ;
+  for(i = 0; i < des.nrow(); i++){
+    if (cont <= n_alts){
+      rowsum_rep[i] = rowsum[index];
+      cont++;
+    }else{
+      index++;
+      rowsum_rep[i] = rowsum[index];
+      cont=2;
+    }
+  }
+  
+  // Probability
+  NumericMatrix p(des.nrow(),1);
+  for(i = 0; i < des.nrow(); i++){
+    p[i] = uexp[i] / rowsum_rep[i];
+  }
+  
+  // information matrix
+  //  Crossprod 1
+  // des_p = des*p
+  NumericMatrix des_p(des.nrow(),des.ncol());
+  for(int j = 0; j < des.ncol(); j++){
+    for( i = 0; i < des.nrow(); i++){
+      des_p(i,j) = des(i,j) * p[i];
+    }
+  }
+  
+  // crossprod(des * p, des)
+  arma::mat des_p_arma(des_p.begin(), des_p.nrow(), des_p.ncol(), false);
+  arma::mat cross_1 = des_p_arma.t() * des_arma;
+  
+  //  Crossprod 2
+  //rowsum( des * p, group)
+  NumericMatrix des_p_rowsum(des_p.nrow()/n_alts,des_p.ncol());
+  for(int j=0; j < des_p.ncol(); j++){ 
+    cont = 1;
+    index = 0;
+    for( i = 0; i < des_p.nrow(); i++){
+      if( cont <= n_alts){
+        des_p_rowsum(index,j) += des_p(i,j);
+        cont++;
+      }else{
+        index++;
+        des_p_rowsum(index,j) += des_p(i,j);
+        cont = 2;
+      }
+    }
+  }
+  
+  // crossprod(des * p, des)
+  arma::mat des_p_rowsum_arma(des_p_rowsum.begin(), des_p_rowsum.nrow(), des_p_rowsum.ncol(), false);
+  arma::mat cross_2 = des_p_rowsum_arma.t() * des_p_rowsum_arma;
+  
+  // Info.des
+  //info.des <- crossprod(des * p, des) - crossprod(rowsum( des * p, group))
+  arma::mat info_des = cross_1 - cross_2;
+  return(wrap(info_des));
+}
+```
+
+```{r bench_1_2}
+#sourceCpp("InfoDes_cpp.cpp")
+source("seqDB2.R")
+set <- SeqDB(des = init.des, cand.set = cs, n.alts = 2,
+             par.draws = dr, prior.covar = v, weights = w)
+set2 <- SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
+               par.draws = dr, prior.covar = v, weights = w)
+set;set2
+
+a <- microbenchmark(seqDB = SeqDB(des = init.des, cand.set = cs, n.alts = 2,
+                     par.draws = dr, prior.covar = v, weights = w),
+               seqDB2 = SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
+                      par.draws = dr, prior.covar = v, weights = w));a
+autoplot.microbenchmark(a)
+```
+The implementation in C++ is almost **six times (6x) faster** than the original function. <br>
+
+## 3. Find the next biggest bottleneck <br>
+As it was mentioned before, optimization is an iterative process. So the next step is to profile this new function to find new bottlenecks.<br>
+To do so, all elements are removed from the workspace and the example showed above is run again. Then the profiling is analized:
+
+```{r provis_seqDB2}
+ profvis(SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
+             par.draws = dr, prior.covar = v, weights = w))
+```
+
+These results are similar as in the first function:
+- The *profvis* result shows that in the *seqDB2* function the bottleneck is located in an apply function. This apply calls the *DBerrS* function.<br>
+- In *DBerrS2* function, the bottleneck is located in an apply function that calls the *DerrS2* function. <br>
+- In *DerrS2* function, there are two lines, besides *InfoDes*, that takes time to process: the calculation of the determinant of the information matrix, and the append of two matrices.<br>
+<br>
+For these reasons, the next bottleneck is in the *DerrS* function.
+
+## 4. Implementation of *InfoDes* in C++ with Rcpp package.
+As above, before implementing the code in C++, the parameters of the function *seqDB* as well as the variables created before the first apply within the function are created in the global enviroment (like an attach). This time there other variables that are needed.
+```{r echo=FALSE}
+# Paramaters.
+des <- init.des;des # Optimal design (matrix)
+cand.set <- cs;cs # All possible treatments (matrix)
+n.alts <- 2 # Number of alternatives for each set (numeric)
+par.draws <- dr # Draws from the posterior (matrix)
+prior.covar <-  v;prior.covar # Prior covariance matrix (Multinormal) (matrix)
+weights <- w;weights # Weights from importance sampling algorithm (numeric)
+reduce <- TRUE
+
+n.sets <- nrow(des) / n.alts # Number of sets
+cte.des <- NULL # 
+# Detect alternative specific constants
+des.f <- as.data.frame(des)
+alt.cte <- dplyr::select(des.f, dplyr::contains(".cte"))
+if (ncol(alt.cte) > 0) {
+  cte.des <- alt.cte[1:n.alts, ]
+}
+```
+
+```{r}
+# Starting and initializing values.
+i.cov <- solve(prior.covar) # Inverse of prior covariance matrix
+d.start <- apply(par.draws, 1, Derr2, des = des,  n.alts = n.alts) #  Calculate the D-error for each alternative
+db.start <- mean(d.start, na.rm = TRUE)  # Calculates the mean D-error
+full.comb <- gtools::combinations(n = nrow(cand.set), r = n.alts, repeats.allowed = !reduce) # Calculates all possible combinations without repetition
+n.par <- ncol(par.draws) # Number of parameters
+
+# For each potential set, select best. 
+# db.errors <- apply(full.comb, 1, DBerrS2, cand.set, par.draws, des, n.alts, cte.des, i.cov, n.par, weights)
+
+#   DBerrS2 Function
+set <- as.matrix(cand.set[as.numeric(full.comb[1,]), ]) # matrix with only the alternatives chosen from the matrix of all combinations (full.comb).
+# Add alternative specific constants if necessary
+if (!is.null(cte.des)) {
+  set <- as.matrix(cbind(cte.des, set))
+}
+# For each draw calculate D-error.
+# d.errors <- apply(par.draws, 1, DerrS2, set, des, n.alts, i.cov, n.par)
+
+#   DerrS2 Function
+des.f <- rbind(des, set)  # Append of optimal design with new alternatives
+info.d <- InfoDes(par = par.draws[1,], des = des.f, n.alts = n.alts)  # Information matrix for each row
+d.error <- det(info.d + i.cov)^(-1 / n.par) # Calculate sequential d-error
+```
+Then, the implementation is coded and sourced in R to make the comparison. To do this, each line of the *DerrS* function was coded in C++ and tested. <br>
+Having done this, a copy of the *seqDB* function is done, called *seqDB3*, with the following changes: <br>
+- Calls the function *Derr2* instead of *Derr*, which calls the function *Infodes_cpp* instead of *InfoDes*. <br>
+- Calls the function *DBerrS3* instead of *DBerrS*, which calls the function *DerrS_cpp* instead of *DerrS*. <br>
+<br>
+The comparison of the results and time to execute is presented:
+
+```{Rcpp echo=F, cache=T}
+// [[Rcpp::depends(RcppArmadillo)]]
+
+# include <RcppArmadillo.h>
+
+using namespace Rcpp;
+
+// [[Rcpp::export]]
+double DerrS_cpp(NumericVector par, NumericMatrix set, NumericMatrix des,
+                        double n_alts, NumericMatrix inv_cov, double n_par) {
+  //https://github.com/petewerner/misc/wiki/RcppArmadillo-cheatsheet#create
+  // des.f <- rbind(des, set)  # Append of optimal design with new alternatives
+  arma::mat des_arma(des.begin(), des.nrow(), des.ncol(), false);
+  arma::mat set_arma(set.begin(), set.nrow(), set.ncol(), false);
+  arma::mat des_f = join_cols(des_arma, set_arma);
+  
+ // Another way to do the rbind: (It's slower)
+ /*NumericMatrix out = no_init_matrix(des.nrow()+set.nrow(), des.ncol());
+ for (int j = 0; j < des.nrow()+set.nrow(); j++) {
+   if (j < des.nrow()) {
+     out(j, _) = des(j, _);
+   } else {
+     out(j, _) = set(j - des.nrow(), _);
+   }
+ }*/
+ //Rcout << "arma:" << des_f << std::endl;
+ //Rcout << "std:" << out << std::endl;
+ 
+  // Call function InfoDes_cpp
+  //info.d <- InfoDes(par = par.draws, des = des.f, n.alts = n.alts) 
+  //NumericMatrix info_d(des.ncol(),des.ncol());
+  Function InfoDes_cpp( "InfoDes_cpp" ) ; 
+  NumericMatrix info_d = InfoDes_cpp(par,wrap(des_f),n_alts);
+  
+  // Calculate determinant
+  //d.error <- det(info.d + i.cov)^(-1 / n.par)
+  arma::mat info_d_arma(info_d.begin(), info_d.nrow(), info_d.ncol(), false);
+  arma::mat inv_cov_arma(inv_cov.begin(), inv_cov.nrow(), inv_cov.ncol(), false);
+  arma::mat sum_1 = info_d_arma + inv_cov_arma;
+  double det = arma::det(sum_1);
+  double d = pow(det,(-1 / n_par));
+  //Rcout << "det= "<<det<<std::endl;
+  //Rcout << "d= "<<d<<std::endl;
+  //double det = pow(det(sum_1),(-1 / n_par);
+  return(d);
+  //return(wrap(sum_1));
+  //return(info_d);
+}
+
+ 
+ 
+ // [[Rcpp::export]]
+ double det_cpp(NumericMatrix set) {
+   arma::mat set_arma(set.begin(), set.nrow(), set.ncol(), false);
+   return(arma::det(set_arma));
+ }
+```
+
+```{r bench_1_3}
+#sourceCpp("InfoDes_cpp.cpp")
+sourceCpp("DerrS_cpp.cpp")
+source("seqDB2.R")
+source("seqDB3.R")
+
+set <- SeqDB(des = init.des, cand.set = cs, n.alts = 2,
+             par.draws = dr, prior.covar = v, weights = w)
+set2 <- SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
+               par.draws = dr, prior.covar = v, weights = w)
+set3 <- SeqDB3(des = init.des, cand.set = cs, n.alts = 2,
+               par.draws = dr, prior.covar = v, weights = w)
+set;set2;set3
+
+a <- microbenchmark(seqDB = SeqDB(des = init.des, cand.set = cs, n.alts = 2,
+                    par.draws = dr, prior.covar = v, weights = w),
+              seqDB2 = SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
+                     par.draws = dr, prior.covar = v, weights = w),
+              seqDB3 = SeqDB3(des = init.des, cand.set = cs, n.alts = 2,
+                    par.draws = dr, prior.covar = v, weights = w));a
+autoplot.microbenchmark(a)
+```
+
+As a result, the implementation of *DerrS* does not improve the processing time with respect to *seqDB2*, which only has *InfoDes* in C++.<br> 
+The reason for this finding is that the base function *rbind* is faster that the implementation done in C++.<br>
+However the process time of computing the determinant of the information is faster in C++:
+
+```{Rcpp echo=F, cache=T}
+// [[Rcpp::depends(RcppArmadillo)]]
+
+# include <RcppArmadillo.h>
+
+using namespace Rcpp;
+
+ // [[Rcpp::export]]
+ double det_cpp(NumericMatrix set) {
+   arma::mat set_arma(set.begin(), set.nrow(), set.ncol(), false);
+   return(arma::det(set_arma));
+ }
+
+```
+
+```{r}
+# Calculate determinant
+#sourceCpp("DerrS_cpp.cpp")
+det(info.d + i.cov)^(-1 / n.par) # Calculate sequential d-error
+# The determinant in cpp is faster
+det_cpp(info.d + i.cov)^(-1 / n.par) # Calculate sequential d-error
+a = microbenchmark(R = det(info.d + i.cov)^(-1 / n.par),
+               cpp = det_cpp(info.d + i.cov)^(-1 / n.par));a
+autoplot.microbenchmark(a)
+```
+
+The source code of *rbind* is also done in C++, however it is much longer and complicated because it works for different kinds of R-objects. For this reason, the *rbind* function is kept in the *DerrS* function, and the determinant is computed using the C++ function. <br>
+
+These changes are saved in a new function called *seqDB4* and compared with the previous functions:
+```{r bench_1_4}
+#sourceCpp("InfoDes_cpp.cpp")
+#sourceCpp("DerrS_cpp.cpp")
+source("seqDB2.R")
+source("seqDB3.R")
+source("seqDB4.R")
+
+set <- SeqDB(des = init.des, cand.set = cs, n.alts = 2,
+             par.draws = dr, prior.covar = v, weights = w)
+set2 <- SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
+               par.draws = dr, prior.covar = v, weights = w)
+set3 <- SeqDB3(des = init.des, cand.set = cs, n.alts = 2,
+               par.draws = dr, prior.covar = v, weights = w)
+set4 <- SeqDB4(des = init.des, cand.set = cs, n.alts = 2,
+               par.draws = dr, prior.covar = v, weights = w)
+set;set2;set3;set4
+
+a <- microbenchmark(seqDB = SeqDB(des = init.des, cand.set = cs, n.alts = 2,
+                    par.draws = dr, prior.covar = v, weights = w),
+              seqDB2 = SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
+                     par.draws = dr, prior.covar = v, weights = w),
+              seqDB3 = SeqDB3(des = init.des, cand.set = cs, n.alts = 2,
+                    par.draws = dr, prior.covar = v, weights = w),
+              seqDB4 = SeqDB4(des = init.des, cand.set = cs, n.alts = 2,
+                    par.draws = dr, prior.covar = v, weights = w));a
+autoplot.microbenchmark(a)
+```
+It can be seen, that this new function is again faster than the previous ones.<br>
+
+<br>
+Now, given that a function to compute the determinant is created in C++, the function *Derr* is also modified by calling *det_cpp* function instead of *base::det*. 
+So a new function with all these changes is created, called *seqDB5* and compared:
+```{r bench_1_5}
+#sourceCpp("InfoDes_cpp.cpp")
+#sourceCpp("DerrS_cpp.cpp")
+source("seqDB2.R")
+source("seqDB3.R")
+source("seqDB4.R")
+source("seqDB5.R")
+
+set <- SeqDB(des = init.des, cand.set = cs, n.alts = 2,
+             par.draws = dr, prior.covar = v, weights = w)
+set2 <- SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
+               par.draws = dr, prior.covar = v, weights = w)
+set3 <- SeqDB3(des = init.des, cand.set = cs, n.alts = 2,
+               par.draws = dr, prior.covar = v, weights = w)
+set4 <- SeqDB4(des = init.des, cand.set = cs, n.alts = 2,
+               par.draws = dr, prior.covar = v, weights = w)
+set5 <- SeqDB5(des = init.des, cand.set = cs, n.alts = 2,
+               par.draws = dr, prior.covar = v, weights = w)
+set;set2;set3;set4;set5
+
+a = microbenchmark(seqDB1 = SeqDB(des = init.des, cand.set = cs, n.alts = 2,
+                       par.draws = dr, prior.covar = v, weights = w),
+               seqDB2 = SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
+                          par.draws = dr, prior.covar = v, weights = w),
+               seqDB3 = SeqDB3(des = init.des, cand.set = cs, n.alts = 2,
+                      par.draws = dr, prior.covar = v, weights = w),
+               seqDB4 = SeqDB4(des = init.des, cand.set = cs, n.alts = 2,
+                      par.draws = dr, prior.covar = v, weights = w),
+               seqDB5 = SeqDB5(des = init.des, cand.set = cs, n.alts = 2,
+                                par.draws = dr, prior.covar = v, weights = w));a
+autoplot.microbenchmark(a)
+```
+This results suggest that the last function is the faster one.
+
+###**Conclusion**
+After having implemented some functions in C++, the process time of original function is optimized in several orders of magnitude (almost 9x times faster).
+The modifications are as follows:<br>
+- Infodes is totally rewritten in C++ <br>
+- A new function to compute the determinant in C++ is implemented <br>
+
+In this sense, *seqDB* function now should call *InfoDes_cpp* and *det_cpp*.
+```{r final_plot, fig.cap="final"}
+autoplot.microbenchmark(a)
+```

@@ -361,8 +361,8 @@ w <- draws$weights
 #              par.draws = dr, prior.covar = v, weights = w)
 # set
 
-# profvis(SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
-#               par.draws = dr, prior.covar = v, weights = w))
+profvis(SeqDB2(des = init.des, cand.set = cs, n.alts = 2,
+               par.draws = dr, prior.covar = v, weights = w))
 
 # DerrS is the function to be improved
 # Paramaters.
